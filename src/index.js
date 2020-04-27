@@ -543,7 +543,7 @@ class SftpClient {
         this.client.prependListener('close', closeListener);
         let errorListener = utils.makeErrorListener(reject, this, 'fastGet');
         this.client.prependListener('error', errorListener);
-        if(localPath instanceof String) {
+        if(typeof localPath == 'string') {
           this.sftp.fastGet(from, to, opts, (err) => {
             if (err) {
               this.debugMsg(`fastGet error ${err.message} code: ${err.code}`);
@@ -598,25 +598,22 @@ class SftpClient {
   async fastGetWithStreams(remotePath, localStreams) {
     const stat = await this.stat(remotePath);
     const partSize = 5 * 1024 * 1024;
-    const partCount = stat.size / partSize;
+    const partCount = Math.floor(stat.size / partSize);
     for(let i = 0; i < partCount; i++) {
       const size = partSize * (i + 1) > stat.size? stat.size - (i * partSize) : partSize;
       localStreams.push(new Buffer(size));
     }
 
     await Promise.all(
-      localStreams.map((stream, index) => {
+      localStreams.map((buffer, index) => {
         return new Promise((resolve, reject) => {
+          let concatStream = concat((buffer) => {
+            resolve(resolve);
+          });
           this.sftp.createReadStream(remotePath, {
             start: index * partSize,
             end: (index * partSize) + stream.length
-          }).pipe(stream)
-          .on('end', () => {
-            resolve();
-          })
-          .on('error', (err) => {
-            reject(err);
-          });
+          }).pipe(concatStream);
         });
       })
     );
