@@ -601,18 +601,19 @@ class SftpClient {
     const partCount = Math.floor(stat.size / partSize);
     for(let i = 0; i < partCount; i++) {
       const size = partSize * (i + 1) > stat.size? stat.size - (i * partSize) : partSize;
-      localStreams.push(new Buffer(size));
+      localStreams.push({ start: partSize * i, end: partSize * i + size });
     }
 
     await Promise.all(
-      localStreams.map((buffer, index) => {
+      localStreams.map((params, index) => {
         return new Promise((resolve, reject) => {
           let concatStream = concat((buffer) => {
-            resolve(resolve);
+            localStreams[index] = buffer;
+            resolve();
           });
           this.sftp.createReadStream(remotePath, {
-            start: index * partSize,
-            end: (index * partSize) + stream.length
+            start: params.start,
+            end: params.end
           }).pipe(concatStream);
         });
       })
