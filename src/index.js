@@ -559,30 +559,7 @@ class SftpClient {
             this.removeListener('close', closeListener);
           });
         } else {
-          const stat = await this.sftp.stat(remotePath);
-          const partSize = 5 * 1024 * 1024;
-          const partCount = stat.size / partSize;
-          for(let i = 0; i < partCount; i++) {
-            const size = partSize * (i + 1) > stat.size? stat.size - (i * partSize) : partSize;
-            localPath.push(new Buffer(size));
-          }
-
-          await Promise.all(
-            localPath.map((stream, index) => {
-              return new Promise((resolve, reject) => {
-                this.sftp.createReadStream(remotePath, {
-                  start: index * partSize,
-                  end: (index * partSize) + stream.length
-                }).pipe(stream)
-                .on('end', () => {
-                  resolve();
-                })
-                .on('error', (err) => {
-                  reject(err);
-                });
-              });
-            })
-          );
+          resolve(this.fastGetWithStreams(remotePath, localPath))
         }
       });
     };
@@ -616,6 +593,33 @@ class SftpClient {
     } catch (err) {
       throw utils.formatError(err, 'fastGet');
     }
+  }
+
+  async fastGetWithStreams(remotePath, localStreams) {
+    const stat = await this.stat(remotePath);
+    const partSize = 5 * 1024 * 1024;
+    const partCount = stat.size / partSize;
+    for(let i = 0; i < partCount; i++) {
+      const size = partSize * (i + 1) > stat.size? stat.size - (i * partSize) : partSize;
+      localStreams.push(new Buffer(size));
+    }
+
+    await Promise.all(
+      localStreams.map((stream, index) => {
+        return new Promise((resolve, reject) => {
+          this.sftp.createReadStream(remotePath, {
+            start: index * partSize,
+            end: (index * partSize) + stream.length
+          }).pipe(stream)
+          .on('end', () => {
+            resolve();
+          })
+          .on('error', (err) => {
+            reject(err);
+          });
+        });
+      })
+    );
   }
 
   /**
