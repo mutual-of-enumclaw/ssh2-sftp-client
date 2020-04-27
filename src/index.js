@@ -543,20 +543,47 @@ class SftpClient {
         this.client.prependListener('close', closeListener);
         let errorListener = utils.makeErrorListener(reject, this, 'fastGet');
         this.client.prependListener('error', errorListener);
-        this.sftp.fastGet(from, to, opts, (err) => {
-          if (err) {
-            this.debugMsg(`fastGet error ${err.message} code: ${err.code}`);
-            reject(
-              utils.formatError(
-                `${err.message} src: ${from} dst: ${to}`,
-                'fastGet'
-              )
-            );
+        if(localPath instanceof String) {
+          this.sftp.fastGet(from, to, opts, (err) => {
+            if (err) {
+              this.debugMsg(`fastGet error ${err.message} code: ${err.code}`);
+              reject(
+                utils.formatError(
+                  `${err.message} src: ${from} dst: ${to}`,
+                  'fastGet'
+                )
+              );
+            }
+            resolve(`${from} was successfully download to ${to}!`);
+            this.removeListener('error', errorListener);
+            this.removeListener('close', closeListener);
+          });
+        } else {
+          const stat = await this.sftp.stat(remotePath);
+          const partSize = 5 * 1024 * 1024;
+          const partCount = stat.size / partSize;
+          for(let i = 0; i < partCount; i++) {
+            const size = partSize * (i + 1) > stat.size? stat.size - (i * partSize) : partSize;
+            localPath.push(new Buffer(size));
           }
-          resolve(`${from} was successfully download to ${to}!`);
-          this.removeListener('error', errorListener);
-          this.removeListener('close', closeListener);
-        });
+
+          await Promise.all(
+            localPath.map((stream, index) => {
+              return new Promise((resolve, reject) => {
+                this.sftp.createReadStream(remotePath, {
+                  start: index * partSize,
+                  end: (index * partSize) + stream.length
+                }).pipe(stream)
+                .on('end', () => {
+                  resolve();
+                })
+                .on('error', (err) => {
+                  reject(err);
+                });
+              });
+            })
+          );
+        }
       });
     };
 
