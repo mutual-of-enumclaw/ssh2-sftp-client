@@ -543,7 +543,7 @@ class SftpClient {
         this.client.prependListener('close', closeListener);
         let errorListener = utils.makeErrorListener(reject, this, 'fastGet');
         this.client.prependListener('error', errorListener);
-        if(localPath instanceof String) {
+        if(typeof localPath == 'string') {
           this.sftp.fastGet(from, to, opts, (err) => {
             if (err) {
               this.debugMsg(`fastGet error ${err.message} code: ${err.code}`);
@@ -558,31 +558,6 @@ class SftpClient {
             this.removeListener('error', errorListener);
             this.removeListener('close', closeListener);
           });
-        } else {
-          const stat = await this.sftp.stat(remotePath);
-          const partSize = 5 * 1024 * 1024;
-          const partCount = stat.size / partSize;
-          for(let i = 0; i < partCount; i++) {
-            const size = partSize * (i + 1) > stat.size? stat.size - (i * partSize) : partSize;
-            localPath.push(new Buffer(size));
-          }
-
-          await Promise.all(
-            localPath.map((stream, index) => {
-              return new Promise((resolve, reject) => {
-                this.sftp.createReadStream(remotePath, {
-                  start: index * partSize,
-                  end: (index * partSize) + stream.length
-                }).pipe(stream)
-                .on('end', () => {
-                  resolve();
-                })
-                .on('error', (err) => {
-                  reject(err);
-                });
-              });
-            })
-          );
         }
       });
     };
@@ -616,6 +591,49 @@ class SftpClient {
     } catch (err) {
       throw utils.formatError(err, 'fastGet');
     }
+  }
+
+  async fastGetWithStreams(remotePath, lastRead = null) {
+    const partSize = 5 * 1024 * 1024;
+    if (lastRead == null){
+      const stat = await this.stat(remotePath);
+      lastRead = {
+        stat: stat.size,
+        current: 0
+      };
+      lastRead.partCount = Math.floor(stat.size / partSize); 
+    }
+
+    const localStreams = [];
+    for(let i = lastRead.current; i <= lastRead.partCount; i++) {
+      const size = partSize * (i + 1) > lastRead.stat.size? lastRead.stat.size - (i * partSize) : partSize - 1;
+      localStreams.push({ start: partSize * i, end: partSize * i + size });
+    }
+
+    if (localStreams.length > 100){
+      localStreams.splice(100, localStreams.length - 100);
+    }
+    lastRead.current += localStreams.length;
+    lastRead.complete = lastRead.current >= lastRead.partCount;
+    
+    await Promise.all(
+      localStreams.map((params, index) => {
+        return new Promise((resolve, reject) => {
+          let concatStream = concat((buffer) => {
+            localStreams[index] = buffer;
+            resolve();
+          });
+          this.sftp.createReadStream(remotePath, {
+            start: params.start,
+            end: params.end
+          }).pipe(concatStream);
+        });
+      })
+    );
+    if( lastRead.streams) delete lastRead.streams;
+    lastRead.streams = localStreams;
+    // global.gc();
+    return lastRead;
   }
 
   /**
